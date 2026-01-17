@@ -5,56 +5,67 @@ import SearchMode from './components/SearchMode';
 import ReviewMode from './components/ReviewMode';
 import LibraryMode from './components/LibraryMode';
 import { AppView, WordData } from './types';
+import { fetchWords, addWord, updateWordMastery } from './services/googleSheetsService';
 
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>(AppView.SEARCH);
   const [words, setWords] = useState<WordData[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Load from local storage
+  // Load from Google Sheets
   useEffect(() => {
-    const saved = localStorage.getItem('lingoflux_words');
-    if (saved) {
+    const loadWords = async () => {
       try {
-        setWords(JSON.parse(saved));
+        const data = await fetchWords();
+        setWords(data);
       } catch (e) {
         console.error("Failed to load data", e);
+      } finally {
+        setIsLoaded(true);
       }
-    }
-    setIsLoaded(true);
+    };
+    loadWords();
   }, []);
 
-  // Save to local storage
-  useEffect(() => {
-    if (isLoaded) {
-      localStorage.setItem('lingoflux_words', JSON.stringify(words));
-    }
-  }, [words, isLoaded]);
+  // No local storage sync needed
 
-  const handleAddWord = (word: WordData) => {
+
+  const handleAddWord = async (word: WordData) => {
     // Prevent duplicates based on text
     if (!words.some(w => w.text.toLowerCase() === word.text.toLowerCase())) {
+      // Optimistic update
       setWords(prev => [word, ...prev]);
+      // Sync with backend
+      await addWord(word);
     }
   };
 
-  const handleUpdateMastery = (id: string, isKnown: boolean) => {
+  const handleUpdateMastery = async (id: string, isKnown: boolean) => {
+    const wordToUpdate = words.find(w => w.id === id);
+    if (!wordToUpdate) return;
+
+    let newMastery = wordToUpdate.mastery;
+    if (isKnown) {
+      newMastery = Math.min(5, wordToUpdate.mastery + 1); // +20%
+    } else {
+      newMastery = Math.max(0, wordToUpdate.mastery - 1); // -20%
+    }
+    const lastReviewed = Date.now();
+
+    // Optimistic update
     setWords(prevWords => prevWords.map(word => {
       if (word.id === id) {
-        let newMastery = word.mastery;
-        if (isKnown) {
-          newMastery = Math.min(5, word.mastery + 1); // +20% (1 step)
-        } else {
-          newMastery = Math.max(0, word.mastery - 1); // -20% (1 step)
-        }
         return {
           ...word,
           mastery: newMastery,
-          lastReviewed: Date.now()
+          lastReviewed
         };
       }
       return word;
     }));
+
+    // Sync with backend
+    await updateWordMastery(id, newMastery, lastReviewed);
   };
 
   const renderContent = () => {
